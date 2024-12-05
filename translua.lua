@@ -70,6 +70,19 @@ function runClient()
 
         handleClientCommand(command, client)
     end
+
+    -- Graceful cleanup
+    cleanup(client)
+end
+
+-- Graceful cleanup function
+function cleanup(client)
+    print("Cleaning up resources...")
+    logMessage("Cleaning up resources...", "INFO")
+    if client then
+        client:close()
+        logMessage("Client connection closed.", "INFO")
+    end
 end
 
 -- Helper function to attempt connection with retries
