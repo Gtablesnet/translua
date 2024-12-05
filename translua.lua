@@ -118,7 +118,7 @@ function saveFileFromResponse(command, client)
             print("Error receiving file chunk:", err)
             break
         end
-        if chunk == "\n" then
+        if chunk == "EOF" then
             break  -- End of file marker
         end
         file:write(chunk)
@@ -230,7 +230,8 @@ function sendFile(data, client)
             local chunk = fileData:sub(i, i + chunk_size - 1)
             client:send(chunk)
         end
-        client:send("\n")  -- End of file signal
+        client:send("EOF")  -- End of file marker
+        client:send("\n")   -- New line to mark end of transmission
         client:send("File received successfully\n") -- Send acknowledgment
     else
         client:send("Error: File not found\n")
