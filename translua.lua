@@ -146,8 +146,6 @@ function commandHandling(data, client)
         sendDirectoryListing(client)
     elseif data:match("^cd%s+(.+)$") then
         changeDirectory(data, client)
-    elseif data:match("^save%s+(.+)$") then
-        saveDataToFile(data, client)
     elseif data:match("^get%s+(.+)$") then
         sendFile(data, client)
     else
@@ -171,25 +169,6 @@ function changeDirectory(data, client)
         client:send("Changed directory to " .. dir .. "\n")
     else
         client:send("Failed to change directory: " .. msg .. "\n")
-    end
-end
-
--- Function to save data to a file
-function saveDataToFile(data, client)
-    local content = data:match("^save%s+(.+)$")
-    if content then
-        print("Enter a filename to save the data:")
-        local filename = io.read()
-        local file, err = io.open(filename, "w")
-        if not file then
-            client:send("Error saving data: " .. err .. "\n")
-            return
-        end
-        file:write(content)
-        file:close()
-        client:send("Data saved to file: " .. filename .. "\n")
-    else
-        client:send("Invalid save command.\n")
     end
 end
 
