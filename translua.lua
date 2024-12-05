@@ -1,6 +1,6 @@
 local socket = require("socket")
 local lfs = require("lfs")
-local md5 = require("md5") -- Assuming the md5 library is installed
+local md5 = require("md5") 
 
 -- Global variables
 local logFile = "ftp_log.txt"
