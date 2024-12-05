@@ -1,21 +1,48 @@
 local socket = require("socket")
 local lfs = require("lfs")
-local md5 = require("md5") 
+local md5 = require("md5") -- Assuming the md5 library is installed
 
 -- Global variables
 local logFile = "ftp_log.txt"
+local logLevel = "INFO"  -- Set default log level to INFO (can be "DEBUG", "INFO", "ERROR")
 
--- Function to log messages
-function logMessage(message)
-    local file = io.open(logFile, "a")
-    file:write(os.date("%Y-%m-%d %H:%M:%S") .. " - " .. message .. "\n")
-    file:close()
+-- Function to log messages with verbosity levels
+function logMessage(message, level)
+    -- Set default level to INFO if not provided
+    level = level or "INFO"
+
+    -- Check if the current log level allows this message to be logged
+    if shouldLog(level) then
+        local file = io.open(logFile, "a")
+        file:write(os.date("%Y-%m-%d %H:%M:%S") .. " [" .. level .. "] - " .. message .. "\n")
+        file:close()
+    end
+end
+
+-- Function to check if the current log level allows logging this message
+function shouldLog(level)
+    -- Define log level hierarchy (DEBUG < INFO < ERROR)
+    local levels = { "DEBUG", "INFO", "ERROR" }
+    local currentLevelIndex = table.indexOf(levels, logLevel)
+    local messageLevelIndex = table.indexOf(levels, level)
+
+    return messageLevelIndex >= currentLevelIndex
+end
+
+-- Helper function to find the index of a value in a table
+function table.indexOf(tbl, value)
+    for i, v in ipairs(tbl) do
+        if v == value then
+            return i
+        end
+    end
+    return nil
 end
 
 -- Function to handle the client role
 function runClient()
     print("Running as Client.")
-    logMessage("Client started")
+    logMessage("Client started", "INFO")
     local client = socket.tcp()
 
     -- Set timeout for client connection (10 seconds)
@@ -31,7 +58,7 @@ function runClient()
         return
     end
     print("Connected to server:", host, port)
-    logMessage("Connected to server: " .. host .. ":" .. port)
+    logMessage("Connected to server: " .. host .. ":" .. port, "INFO")
 
     -- Client communication loop
     while true do
@@ -55,11 +82,11 @@ function attemptConnection(client, host, port, retries)
         end
         attempt = attempt + 1
         print("Connection failed. Retrying... (" .. attempt .. "/" .. retries .. ")")
-        logMessage("Connection failed. Retrying... (" .. attempt .. "/" .. retries .. ")")
+        logMessage("Connection failed. Retrying... (" .. attempt .. "/" .. retries .. ")", "INFO")
         socket.sleep(2)  -- Wait before retrying
     end
     print("Failed to connect after " .. retries .. " attempts.")
-    logMessage("Failed to connect after " .. retries .. " attempts.")
+    logMessage("Failed to connect after " .. retries .. " attempts.", "ERROR")
     return false
 end
 
@@ -79,7 +106,7 @@ function handleConnectionError(err)
     else
         print("Failed to connect to server:", err)
     end
-    logMessage("Connection error: " .. err)
+    logMessage("Connection error: " .. err, "ERROR")
 end
 
 -- Helper function to get a command from the client
@@ -94,7 +121,7 @@ function handleClientCommand(command, client)
     local success, err = client:send(command .. "\n")
     if not success then
         print("Error sending data: " .. err)
-        logMessage("Error sending command: " .. err)
+        logMessage("Error sending command: " .. err, "ERROR")
         return
     end
 
@@ -116,7 +143,7 @@ function waitForAck(client)
     local response, err = client:receive("*a")
     if err then
         print("Error receiving response:", err)
-        logMessage("Error receiving response: " .. err)
+        logMessage("Error receiving response: " .. err, "ERROR")
         return nil
     end
     return response
@@ -126,13 +153,13 @@ end
 function validateServerAck(response)
     if response:match("File received successfully") then
         print("File transfer successful!")
-        logMessage("File transfer successful")
+        logMessage("File transfer successful", "INFO")
     elseif response:match("Error:") then
         print("Error occurred on server: " .. response)
-        logMessage("Server error: " .. response)
+        logMessage("Server error: " .. response, "ERROR")
     else
         print("Unexpected response from server: " .. response)
-        logMessage("Unexpected server response: " .. response)
+        logMessage("Unexpected server response: " .. response, "ERROR")
     end
 end
 
@@ -145,7 +172,7 @@ function saveFileFromResponse(command, client)
     local file, err = io.open(filename, "wb")
     if not file then
         print("Error saving the file:", err)
-        logMessage("Error saving file: " .. err)
+        logMessage("Error saving file: " .. err, "ERROR")
         return
     end
 
@@ -156,7 +183,7 @@ function saveFileFromResponse(command, client)
         local chunk, err = client:receive(1024)  -- Receive in 1KB chunks
         if err then
             print("Error receiving file chunk:", err)
-            logMessage("Error receiving file chunk: " .. err)
+            logMessage("Error receiving file chunk: " .. err, "ERROR")
             break
         end
         if chunk == "EOF" then
@@ -170,29 +197,29 @@ function saveFileFromResponse(command, client)
 
     -- Verify the file integrity (using MD5 checksum)
     local checksum = md5.sumhexa(receivedData)
-    logMessage("File " .. filename .. " received, checksum: " .. checksum)
+    logMessage("File " .. filename .. " received, checksum: " .. checksum, "INFO")
 
     print("File saved as " .. filename)
-    logMessage("File saved as " .. filename)
+    logMessage("File saved as " .. filename, "INFO")
 end
 
 -- Function to close the connection
 function closeConnection(client)
     print("Closing connection...")
-    logMessage("Closing connection")
+    logMessage("Closing connection", "INFO")
     client:close()
 end
 
 -- Function to handle the server role
 function runServer()
     print("Running as Server.")
-    logMessage("Server started")
+    logMessage("Server started", "INFO")
     local host, port = getServerDetailsForServer()
 
     -- Set up server and bind to specified host and port
     local server = assert(socket.bind(host, port))
     print("Server started on " .. host .. ":" .. port)
-    logMessage("Server started on " .. host .. ":" .. port)
+    logMessage("Server started on " .. host .. ":" .. port, "INFO")
 
     while true do
         print("Waiting for a client to connect...")
@@ -223,7 +250,7 @@ function handleServerCommunication(client)
         local data, err = client:receive() -- Receive data from client
         if not data then
             print("Client disconnected or error:", err)
-            logMessage("Client disconnected or error: " .. err)
+            logMessage("Client disconnected or error: " .. err, "ERROR")
             break
         end
 
@@ -238,70 +265,27 @@ function commandHandling(data, client)
     -- Validate input to prevent command injection (only alphanumeric characters allowed)
     if not data:match("^[a-zA-Z0-9%s]+$") then
         client:send("Invalid command format. Please try again.\n")
-        logMessage("Invalid command format received: " .. data)
+        logMessage("Invalid command format received: " .. data, "ERROR")
         return
     end
 
-    -- Command handling
-    if data:match("^dir$") then
-        sendDirectoryListing(client)
-    elseif data:match("^cd%s+(.+)$") then
-        changeDirectory(data, client)
-    elseif data:match("^get%s+(.+)$") then
-        sendFile(data, client)
+    if data == "get" then
+        client:send("Sending file...")
+        logMessage("Sending file to client", "INFO")
     else
-        client:send("Unknown command: " .. data .. "\n")
-        logMessage("Unknown command received: " .. data)
+        client:send("Unknown command: " .. data)
+        logMessage("Unknown command received: " .. data, "ERROR")
     end
 end
 
--- Function to send the directory listing
-function sendDirectoryListing(client)
-    local cmd = (package.config:sub(1,1) == '\\') and "dir" or "ls"  -- Platform detection
-    local handle = io.popen(cmd)
-    local result = handle:read("*a")
-    handle:close()
-    client:send(result)
-    logMessage("Sent directory listing")
-end
-
--- Function to change directory
-function changeDirectory(data, client)
-    local dir = data:match("^cd%s+(.+)$")
-    local success, msg = lfs.chdir(dir)
-    if success then
-        client:send("Changed directory to " .. dir .. "\n")
-        logMessage("Changed directory to " .. dir)
-    else
-        client:send("Error changing directory: " .. msg .. "\n")
-        logMessage("Error changing directory: " .. msg)
-    end
-end
-
--- Function to send the file
-function sendFile(data, client)
-    local filePath = data:match("^get%s+(.+)$")
-    local file = io.open(filePath, "rb")
-    if not file then
-        client:send("Error: File not found.\n")
-        logMessage("File not found: " .. filePath)
-        return
-    end
-
-    local content = file:read("*a")
-    file:close()
-
-    -- Send file content in chunks
-    client:send(content)
-    client:send("EOF") -- End of file marker
-    logMessage("Sent file " .. filePath)
-end
-
--- Main execution (Choose whether to run as client or server)
-print("Run as client or server? (C/S):")
-local choice = io.read():lower()
-if choice == "c" then
+-- Main execution
+local role
+print("Select role: 1. Server 2. Client")
+role = tonumber(io.read())
+if role == 1 then
+    runServer()
+elseif role == 2 then
     runClient()
 else
-    runServer()
+    print("Invalid selection. Exiting.")
 end
