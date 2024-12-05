@@ -264,24 +264,43 @@ end
 function commandHandling(data, client)
     -- Validate input to prevent command injection (only alphanumeric characters allowed)
     if not data:match("^[a-zA-Z0-9%s]+$") then
-        client:send("Invalid command format. Please try again.\n")
-        logMessage("Invalid command format received: " .. data, "ERROR")
+        client:send("Invalid command.\n")
+        logMessage("Invalid command received: " .. data, "ERROR")
         return
     end
 
-    if data == "get" then
-        client:send("Sending file...")
-        logMessage("Sending file to client", "INFO")
+    -- Process the "get" command (file retrieval)
+    if data:match("^get%s+(.+)$") then
+        local filename = data:match("^get%s+(.+)$")
+        sendFile(filename, client)
+    elseif data:match("^exit$") then
+        client:send("Goodbye!\n")
     else
-        client:send("Unknown command: " .. data)
-        logMessage("Unknown command received: " .. data, "ERROR")
+        client:send("Unknown command.\n")
     end
 end
 
+-- Function to send a file to the client
+function sendFile(filename, client)
+    local file, err = io.open(filename, "rb")
+    if not file then
+        client:send("Error opening file: " .. err .. "\n")
+        logMessage("Error opening file: " .. err, "ERROR")
+        return
+    end
+
+    -- Read file contents and send to client
+    local data = file:read("*a")
+    client:send(data)
+    file:close()
+    print("File sent successfully!")
+    logMessage("File sent successfully: " .. filename, "INFO")
+end
+
 -- Main execution
-local role
 print("Select role: 1. Server 2. Client")
-role = tonumber(io.read())
+local role = tonumber(io.read())
+
 if role == 1 then
     runServer()
 elseif role == 2 then
