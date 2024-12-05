@@ -71,7 +71,7 @@ function handleClientCommand(command, client)
         print("Server response:\n" .. response)
         -- Handle based on the command sent
         if command:match("^get%s+(.+)$") then
-            saveFileFromResponse(command, response)
+            saveFileFromResponse(command, client)
         end
         -- Handle acknowledgment validation
         validateServerAck(response)
@@ -100,17 +100,31 @@ function validateServerAck(response)
 end
 
 -- Function to save the file from the server's response
-function saveFileFromResponse(command, response)
+function saveFileFromResponse(command, client)
     local filePath = command:match("^get%s+(.+)$")
     local filename = filePath:match("([^/\\]+)$")  -- Extract filename
-    local file = io.open(filename, "w")
-    if file then
-        file:write(response)
-        file:close()
-        print("File saved as " .. filename)
-    else
-        print("Error saving the file.")
+
+    -- Open the file in write mode
+    local file, err = io.open(filename, "wb")
+    if not file then
+        print("Error saving the file:", err)
+        return
     end
+
+    -- Receive and write the file in chunks
+    while true do
+        local chunk, err = client:receive(1024)  -- Receive in 1KB chunks
+        if err then
+            print("Error receiving file chunk:", err)
+            break
+        end
+        if chunk == "\n" then
+            break  -- End of file marker
+        end
+        file:write(chunk)
+    end
+    file:close()
+    print("File saved as " .. filename)
 end
 
 -- Function to close the connection
@@ -188,7 +202,8 @@ end
 
 -- Function to send the directory listing
 function sendDirectoryListing(client)
-    local handle = io.popen("dir")
+    local cmd = (package.config:sub(1,1) == '\\') and "dir" or "ls"  -- Platform detection
+    local handle = io.popen(cmd)
     local result = handle:read("*a")
     handle:close()
     client:send(result)
@@ -224,7 +239,7 @@ end
 
 -- Function to read file content
 function getFile(filePath)
-    local file, err = io.open(filePath, "r")
+    local file, err = io.open(filePath, "rb")
     if not file then
         print("Failed to open file:", err)
         return nil
