@@ -1,5 +1,5 @@
 local socket = require("socket")
-local lfs = require("lfs") -- For directory handling
+local lfs = require("lfs")
 
 -- Function to handle the client role
 function runClient()
@@ -10,70 +10,87 @@ function runClient()
     client:settimeout(10)
 
     -- Get server details
-    print("Enter the server IP Address:")
-    local host = io.read()
-    print("Enter the server port:")
-    local port = tonumber(io.read())
+    local host, port = getServerDetails()
 
     -- Connect to the server
     local success, err = client:connect(host, port)
     if not success then
-        if err == "timeout" then
-            print("Connection timeout. Please check the server and try again.")
-        else
-            print("Failed to connect to server:", err)
-        end
+        handleConnectionError(err)
         return
     end
     print("Connected to server:", host, port)
 
     -- Client communication loop
     while true do
-        print("Enter a command (or type 'exit' to quit):")
-        local command = io.read()
-
+        local command = getClientCommand()
         if command:lower() == "exit" then
-            print("Closing connection...")
-            client:close()
+            closeConnection(client)
             break
         end
 
-        -- Send command to server
-        client:send(command .. "\n")
+        handleClientCommand(command, client)
+    end
+end
 
-        -- Wait for server response
-        local response, receive_err = client:receive("*a")
-        if response then
-            print("Server response:\n" .. response)
+-- Helper function to get server details
+function getServerDetails()
+    print("Enter the server IP Address:")
+    local host = io.read()
+    print("Enter the server port:")
+    local port = tonumber(io.read())
+    return host, port
+end
 
-            -- Handle saving files if needed (e.g., "get" command)
-            if command:match("^get%s+(.+)$") then
-                local filePath = command:match("^get%s+(.+)$")
-                local filename = filePath:match("([^/\\]+)$")  -- Extract filename
-                local file = io.open(filename, "w")
-                if file then
-                    file:write(response)
-                    file:close()
-                    print("File saved as " .. filename)
-                else
-                    print("Error saving the file.")
-                end
-            end
-        else
-            print("Error receiving response:", receive_err)
+-- Helper function to handle connection errors
+function handleConnectionError(err)
+    if err == "timeout" then
+        print("Connection timeout. Please check the server and try again.")
+    else
+        print("Failed to connect to server:", err)
+    end
+end
+
+-- Helper function to get a command from the client
+function getClientCommand()
+    print("Enter a command (or type 'exit' to quit):")
+    return io.read()
+end
+
+-- Helper function to handle client command
+function handleClientCommand(command, client)
+    -- Send the command to the server
+    client:send(command .. "\n")
+
+    -- Wait for server response
+    local response, receive_err = client:receive("*a")
+    if response then
+        print("Server response:\n" .. response)
+        if command:match("^get%s+(.+)$") then
+            saveFileFromResponse(command, response)
         end
+    else
+        print("Error receiving response:", receive_err)
+    end
+end
+
+-- Function to save the file from server's response
+function saveFileFromResponse(command, response)
+    local filePath = command:match("^get%s+(.+)$")
+    local filename = filePath:match("([^/\\]+)$")  -- Extract filename
+    local file = io.open(filename, "w")
+    if file then
+        file:write(response)
+        file:close()
+        print("File saved as " .. filename)
+    else
+        print("Error saving the file.")
     end
 end
 
 -- Function to handle the server role
 function runServer()
     print("Running as Server.")
-    print("Enter the IP address to bind (default: 127.0.0.1):")
-    local host = io.read()
-    if host == "" then host = "127.0.0.1" end
-    print("Enter the port to listen on (default: 69):")
-    local port = tonumber(io.read())
-    if not port then port = 69 end
+    local host, port = getServerDetailsForServer()
 
     -- Set up server and bind to specified host and port
     local server = assert(socket.bind(host, port))
@@ -85,19 +102,34 @@ function runServer()
         print("Client connected!")
 
         -- Communication loop
-        while true do
-            local data, err = client:receive() -- Receive data from client
-            if not data then
-                print("Client disconnected or error:", err)
-                break
-            end
-
-            print("Received:", data)
-            -- Call commandHandling with received data and client
-            commandHandling(data, client)
-        end
+        handleServerCommunication(client)
         client:close()
         print("Client connection closed.")
+    end
+end
+
+-- Helper function to get server details (for server)
+function getServerDetailsForServer()
+    print("Enter the IP address to bind (default: 127.0.0.1):")
+    local host = io.read()
+    if host == "" then host = "127.0.0.1" end
+    print("Enter the port to listen on (default: 69):")
+    local port = tonumber(io.read())
+    if not port then port = 69 end
+    return host, port
+end
+
+-- Helper function to handle server communication
+function handleServerCommunication(client)
+    while true do
+        local data, err = client:receive() -- Receive data from client
+        if not data then
+            print("Client disconnected or error:", err)
+            break
+        end
+
+        print("Received:", data)
+        commandHandling(data, client)
     end
 end
 
@@ -111,71 +143,70 @@ function commandHandling(data, client)
 
     -- Command handling
     if data:match("^dir$") then
-        -- List contents of the current directory
-        local handle = io.popen("dir")
-        local result = handle:read("*a")
-        handle:close()
-        client:send(result)
+        sendDirectoryListing(client)
     elseif data:match("^cd%s+(.+)$") then
-        local dir = data:match("^cd%s+(.+)$")
-        if dir == "" then
-            client:send("Error: No directory specified.\n")
-        else
-            local success, msg = lfs.chdir(dir)
-            if success then
-                -- Send the current working directory after successful `cd`
-                local cwd = lfs.currentdir()
-                client:send("Changed directory to " .. cwd .. "\n")
-            else
-                client:send("Error: Unable to change directory: " .. msg .. "\n")
-            end
-        end
+        changeDirectory(data, client)
     elseif data:match("^save%s+(.+)$") then
-        local content = data:match("^save%s+(.+)$")
-        if content then
-            local success, err = saveDataToFile(content)
-            if success then
-                client:send("Data saved successfully.\n")
-            else
-                client:send("Error: Unable to save data: " .. err .. "\n")
-            end
-        else
-            client:send("Error: Invalid save command or missing data.\n")
-        end
+        saveDataToFile(data, client)
     elseif data:match("^get%s+(.+)$") then
-        local filePath = data:match("^get%s+(.+)$")
-        if filePath then
-            local fileData, err = getFile(filePath)
-            if fileData then
-                -- Send file content in chunks if necessary
-                local chunk_size = 1024  -- 1 KB chunks
-                for i = 1, #fileData, chunk_size do
-                    local chunk = fileData:sub(i, i + chunk_size - 1)
-                    client:send(chunk)
-                end
-                client:send("\n")  -- End of file signal
-            else
-                client:send("Error: Unable to read file or file does not exist: " .. err .. "\n")
-            end
-        end
+        sendFile(data, client)
     else
         client:send("Unknown command: " .. data .. "\n")
     end
 end
 
--- Function to save data to a file
-function saveDataToFile(data)
-    print("Enter a filename to save the data:")
-    local filename = io.read()
-    local file, err = io.open(filename, "w")
-    if not file then
-        print("Error saving data:", err)
-        return false, err
+-- Function to send the directory listing
+function sendDirectoryListing(client)
+    local handle = io.popen("dir")
+    local result = handle:read("*a")
+    handle:close()
+    client:send(result)
+end
+
+-- Function to change directory
+function changeDirectory(data, client)
+    local dir = data:match("^cd%s+(.+)$")
+    local success, msg = lfs.chdir(dir)
+    if success then
+        client:send("Changed directory to " .. dir .. "\n")
+    else
+        client:send("Failed to change directory: " .. msg .. "\n")
     end
-    file:write(data)
-    file:close()
-    print("Data saved to file:", filename)
-    return true
+end
+
+-- Function to save data to a file
+function saveDataToFile(data, client)
+    local content = data:match("^save%s+(.+)$")
+    if content then
+        print("Enter a filename to save the data:")
+        local filename = io.read()
+        local file, err = io.open(filename, "w")
+        if not file then
+            client:send("Error saving data: " .. err .. "\n")
+            return
+        end
+        file:write(content)
+        file:close()
+        client:send("Data saved to file: " .. filename .. "\n")
+    else
+        client:send("Invalid save command.\n")
+    end
+end
+
+-- Function to send a file to the client
+function sendFile(data, client)
+    local filePath = data:match("^get%s+(.+)$")
+    local fileData = getFile(filePath)
+    if fileData then
+        local chunk_size = 1024  -- 1 KB chunks
+        for i = 1, #fileData, chunk_size do
+            local chunk = fileData:sub(i, i + chunk_size - 1)
+            client:send(chunk)
+        end
+        client:send("\n")  -- End of file signal
+    else
+        client:send("Error reading file.\n")
+    end
 end
 
 -- Function to read file content
@@ -183,7 +214,7 @@ function getFile(filePath)
     local file, err = io.open(filePath, "r")
     if not file then
         print("Failed to open file:", err)
-        return nil, err
+        return nil
     end
     local content = file:read("*a")
     file:close()
