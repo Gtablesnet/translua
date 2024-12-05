@@ -12,10 +12,10 @@ function runClient()
     -- Get server details
     local host, port = getServerDetails()
 
-    -- Connect to the server
-    local success, err = client:connect(host, port)
+    -- Attempt connection with retry mechanism
+    local success = attemptConnection(client, host, port, 3)
     if not success then
-        handleConnectionError(err)
+        handleConnectionError("Connection failed after retries")
         return
     end
     print("Connected to server:", host, port)
@@ -30,6 +30,22 @@ function runClient()
 
         handleClientCommand(command, client)
     end
+end
+
+-- Helper function to attempt connection with retries
+function attemptConnection(client, host, port, retries)
+    local attempt = 0
+    while attempt < retries do
+        local success, err = client:connect(host, port)
+        if success then
+            return true
+        end
+        attempt = attempt + 1
+        print("Connection failed. Retrying... (" .. attempt .. "/" .. retries .. ")")
+        socket.sleep(2)  -- Wait before retrying
+    end
+    print("Failed to connect after " .. retries .. " attempts.")
+    return false
 end
 
 -- Helper function to get server details
@@ -265,3 +281,4 @@ function main()
 end
 
 main()
+
