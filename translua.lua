@@ -31,6 +31,7 @@ function runClient()
     while true do
         print("Enter a command (or type 'exit' to quit):")
         local command = io.read()
+
         if command:lower() == "exit" then
             print("Closing connection...")
             client:close()
@@ -110,6 +111,7 @@ function commandHandling(data, client)
 
     -- Command handling
     if data:match("^dir$") then
+        -- List contents of the current directory
         local handle = io.popen("dir")
         local result = handle:read("*a")
         handle:close()
@@ -121,7 +123,9 @@ function commandHandling(data, client)
         else
             local success, msg = lfs.chdir(dir)
             if success then
-                client:send("Changed directory to " .. dir .. "\n")
+                -- Send the current working directory after successful `cd`
+                local cwd = lfs.currentdir()
+                client:send("Changed directory to " .. cwd .. "\n")
             else
                 client:send("Error: Unable to change directory: " .. msg .. "\n")
             end
@@ -165,6 +169,7 @@ function saveDataToFile(data)
     local filename = io.read()
     local file, err = io.open(filename, "w")
     if not file then
+        print("Error saving data:", err)
         return false, err
     end
     file:write(data)
@@ -177,6 +182,7 @@ end
 function getFile(filePath)
     local file, err = io.open(filePath, "r")
     if not file then
+        print("Failed to open file:", err)
         return nil, err
     end
     local content = file:read("*a")
@@ -199,4 +205,3 @@ function main()
 end
 
 main()
-
