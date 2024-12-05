@@ -59,21 +59,47 @@ end
 -- Helper function to handle client command
 function handleClientCommand(command, client)
     -- Send the command to the server
-    client:send(command .. "\n")
+    local success, err = client:send(command .. "\n")
+    if not success then
+        print("Error sending data: " .. err)
+        return
+    end
 
-    -- Wait for server response
-    local response, receive_err = client:receive("*a")
+    -- Wait for the server acknowledgment response
+    local response = waitForAck(client)
     if response then
         print("Server response:\n" .. response)
+        -- Handle based on the command sent
         if command:match("^get%s+(.+)$") then
             saveFileFromResponse(command, response)
         end
-    else
-        print("Error receiving response:", receive_err)
+        -- Handle acknowledgment validation
+        validateServerAck(response)
     end
 end
 
--- Function to save the file from server's response
+-- Function to wait for acknowledgment from the server
+function waitForAck(client)
+    local response, err = client:receive("*a")
+    if err then
+        print("Error receiving response:", err)
+        return nil
+    end
+    return response
+end
+
+-- Function to validate the server's acknowledgment response
+function validateServerAck(response)
+    if response:match("File received successfully") then
+        print("File transfer successful!")
+    elseif response:match("Error:") then
+        print("Error occurred on server: " .. response)
+    else
+        print("Unexpected response from server: " .. response)
+    end
+end
+
+-- Function to save the file from the server's response
 function saveFileFromResponse(command, response)
     local filePath = command:match("^get%s+(.+)$")
     local filename = filePath:match("([^/\\]+)$")  -- Extract filename
@@ -85,6 +111,12 @@ function saveFileFromResponse(command, response)
     else
         print("Error saving the file.")
     end
+end
+
+-- Function to close the connection
+function closeConnection(client)
+    print("Closing connection...")
+    client:close()
 end
 
 -- Function to handle the server role
@@ -128,7 +160,8 @@ function handleServerCommunication(client)
             break
         end
 
-        print("Received:", data)
+        print("Received command:", data)
+        -- Process the command and send acknowledgment
         commandHandling(data, client)
     end
 end
@@ -183,8 +216,9 @@ function sendFile(data, client)
             client:send(chunk)
         end
         client:send("\n")  -- End of file signal
+        client:send("File received successfully\n") -- Send acknowledgment
     else
-        client:send("Error reading file.\n")
+        client:send("Error: File not found\n")
     end
 end
 
@@ -200,7 +234,7 @@ function getFile(filePath)
     return content
 end
 
--- Main function to determine role
+-- Main entry point
 function main()
     print("Do you want to run as a (1) Client or (2) Server?")
     local choice = tonumber(io.read())
