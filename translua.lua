@@ -3,6 +3,10 @@ local io = require("io")
 local os = require("os")
 local crypto = require("crypto")  -- Include the crypto library for hashing (SHA256)
 
+-- Constants for chunk size and timeout
+local CHUNK_SIZE = 1024
+local TIMEOUT = 10  -- Timeout in seconds
+
 -- Function to log messages to a file
 function log(message)
     local log_file = io.open("ftplua.txt", "a")  -- Open the log file in append mode
@@ -62,7 +66,27 @@ function execute_command(command)
     return result
 end
 
--- Function to get the content of a file
+-- Function to send a file in chunks
+function send_file_in_chunks(client, filename)
+    log("Sending file in chunks: " .. filename)
+    local file = io.open(filename, "rb")
+    if file then
+        local chunk
+        repeat
+            chunk = file:read(CHUNK_SIZE)  -- Read a chunk of the file
+            if chunk then
+                client:send(chunk)  -- Send the chunk to the client
+            end
+        until not chunk  -- Continue until the end of the file
+        file:close()
+        log("File sent: " .. filename)
+    else
+        client:send("ERROR: File not found.\n")
+        log("Error: File not found for transfer.")
+    end
+end
+
+-- Function to get the content of a file (for small files)
 function get_file_content(filename)
     log("Retrieving content of file: " .. filename)
     local file = io.open(filename, "r")
@@ -85,9 +109,11 @@ function calculate_checksum(filename)
     return crypto.digest("sha256", content)  -- Return the SHA256 hash of the file content
 end
 
--- Function to receive data and execute commands
+-- Function to handle multiple clients with a timeout
 function server_receive_data(client, chunk_size)
     local command = ""  -- Initialize command variable
+    local timeout = socket.gettime() + TIMEOUT
+    client:settimeout(TIMEOUT)  -- Set the timeout for client connections
     while true do
         -- Try to receive data from client
         local data, err = client:receive(chunk_size)
@@ -127,7 +153,7 @@ function server()
         print("Client connected.")
 
         -- Start the function to handle receiving data and executing commands
-        server_receive_data(client, 1024)
+        server_receive_data(client, CHUNK_SIZE)
 
         client:close()  -- Close the connection after handling the command
         log("Client disconnected.")
@@ -157,13 +183,17 @@ function client()
         -- Send command to server and handle response
         client_send_command(client, command)
 
-        -- If the command is 'get', verify the file integrity after download
+        -- If the command is 'get', check file existence and verify integrity
         if command:sub(1, 3) == "get" then
             local filename = command:sub(5)
-            local expected_checksum = calculate_checksum(filename)  -- Get checksum of original file
-            if not verify_file_integrity(filename, expected_checksum) then
-                log("File transfer failed or corrupted for: " .. filename)
-                print("File transfer failed or corrupted.")
+            if not file_exists(filename) then
+                print("Error: File does not exist locally.")
+            else
+                local expected_checksum = calculate_checksum(filename)  -- Get checksum of original file
+                if not verify_file_integrity(filename, expected_checksum) then
+                    log("File transfer failed or corrupted for: " .. filename)
+                    print("File transfer failed or corrupted.")
+                end
             end
         end
     end
@@ -181,7 +211,7 @@ function client_send_command(client, command)
     -- Receive the result of the command from the server
     local result = ""
     while true do
-        local chunk, err = client:receive(1024)
+        local chunk, err = client:receive(CHUNK_SIZE)
         if err then
             if err == "timeout" then
                 log("Timeout while waiting for server response.")
@@ -205,17 +235,26 @@ function client_send_command(client, command)
     log("Server response:\n" .. result)
     print("Server response:\n", result)
 
-    -- Check if the response contains "ACK" or "ERROR" and handle it
+    -- Handle file writing
     if result:sub(1, 3) == "ACK" then
-        -- If it's an ACK message, proceed with file handling
         if command:sub(1, 3) == "get" then
             local filename = command:sub(5)
-            write_file(filename, result)  -- Write the received content to a file
+            write_file(filename, result)
         end
     elseif result:sub(1, 5) == "ERROR" then
-        -- If it's an error message, print it and do not write to the file
         log("Error: " .. result)
         print("Error: " .. result)
+    end
+end
+
+-- Function to check if a file exists
+function file_exists(filename)
+    local file = io.open(filename, "r")
+    if file then
+        file:close()
+        return true
+    else
+        return false
     end
 end
 
