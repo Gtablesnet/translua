@@ -1,205 +1,218 @@
 local socket = require("socket")
-local lfs = require("lfs")
-local md5 = require("md5") -- Assuming the md5 library is installed
+local io = require("io")
+local os = require("os")
+local crypto = require("crypto")  -- Include the crypto library for hashing (SHA256)
 
--- Global variables
-local logFile = "ftp_log.txt"
-local logLevel = "INFO"  -- Set default log level to INFO (can be "DEBUG", "INFO", "ERROR")
+-- Function to ask for IP and port
+function ask_for_ip_and_port(default_ip, default_port)
+    print("Enter IP address (default: " .. default_ip .. "):")
+    local ip = io.read()
+    if ip == "" then ip = default_ip end
 
--- Log level hierarchy
-local levels = { DEBUG = 1, INFO = 2, ERROR = 3 }
+    print("Enter port (default: " .. default_port .. "):")
+    local port = tonumber(io.read())
+    if not port then port = default_port end
 
--- Function to log messages with verbosity levels
-function logMessage(message, level)
-    level = level or "INFO"
-    if levels[level] >= levels[logLevel] then
-        local file = io.open(logFile, "a")
-        file:write(os.date("%Y-%m-%d %H:%M:%S") .. " [" .. level .. "] - " .. message .. "\n")
+    return ip, port
+end
+
+-- Function to execute a command on the server (Windows machine)
+function execute_command(command)
+    local result = ""
+    if command:sub(1, 2) == "cd" then
+        -- Change directory command (cd)
+        local path = command:sub(4)
+        local cd_result = os.execute("cd " .. path)
+        result = "ACK: Changed directory to: " .. path
+    elseif command:sub(1, 3) == "dir" then
+        -- List directory contents command (dir)
+        local handle = io.popen("dir")
+        result = handle:read("*a")  -- Read the output of the dir command
+        handle:close()
+        result = "ACK: Directory listing:\n" .. result
+    elseif command:sub(1, 3) == "get" then
+        -- Get file content command (get)
+        local filename = command:sub(5)
+        local file_content = get_file_content(filename)
+        if file_content then
+            result = "ACK: File content received."
+        else
+            result = "ERROR: File not found."
+        end
+    else
+        -- For any other command, try to execute it
+        local handle = io.popen(command)
+        result = handle:read("*a")
+        handle:close()
+    end
+    return result
+end
+
+-- Function to get the content of a file
+function get_file_content(filename)
+    local file = io.open(filename, "r")
+    if file then
+        local content = file:read("*a")
         file:close()
+        return content
+    else
+        return nil  -- Return nil if the file is not found
     end
 end
 
--- Sanitize file paths to prevent directory traversal attacks
-function sanitizeFilePath(path)
-    return path:gsub("[%.%./\\]", "")  -- Remove parent directory references
+-- Function to calculate the checksum (SHA256) of a file
+function calculate_checksum(filename)
+    local file = io.open(filename, "rb")
+    if not file then return nil end
+    local content = file:read("*a")
+    file:close()
+    return crypto.digest("sha256", content)  -- Return the SHA256 hash of the file content
 end
--- Coroutine for receiving data
-function receiveData(client)
-    local data = ""
+
+-- Function to receive data and execute commands
+function server_receive_data(client, chunk_size)
+    local command = ""  -- Initialize command variable
     while true do
-        local chunk, err = client:receive(1024) -- Receive in 1KB chunks
+        -- Try to receive data from client
+        local data, err = client:receive(chunk_size)
+        if err then
+            if err == "closed" then break end
+            if err == "timeout" then
+                print("Connection timeout, closing the connection.")
+                break
+            end
+            print("Error receiving data:", err)
+        elseif data then
+            command = command .. data  -- Concatenate received data to the command
+            -- If the command ends with a newline, process it
+            if command:sub(-1) == "\n" then
+                print("Received command:", command)
+                local result = execute_command(command)
+                client:send(result .. "\n")  -- Send back the result or output of the command
+                command = ""  -- Reset the command for the next round
+            end
+        end
+    end
+end
+
+-- Main server function that accepts connections and starts the coroutine for receiving data
+function server()
+    local ip, port = ask_for_ip_and_port("*", 8080)  -- Prompt for IP and port
+    local server = assert(socket.bind(ip, port))  -- Bind to specified IP and port
+    print("Server started on " .. ip .. ":" .. port .. "... Waiting for a client.")
+
+    while true do
+        local client = server:accept()  -- Wait for a client to connect
+        client:settimeout(10)  -- Set a timeout for the client connection
+        print("Client connected.")
+
+        -- Start the function to handle receiving data and executing commands
+        server_receive_data(client, 1024)
+
+        client:close()  -- Close the connection after handling the command
+        print("Client disconnected.")
+    end
+end
+
+server()
+
+-- Function to send a command to the server and receive the result
+function client_send_command(client, command)
+    client:send(command .. "\n")  -- Send the command to the server
+
+    -- Receive the result of the command from the server
+    local result = ""
+    while true do
+        local chunk, err = client:receive(1024)
         if err then
             if err == "timeout" then
-                coroutine.yield() -- Yield control for non-blocking behavior
+                print("Timeout while waiting for server response.")
+                break
+            elseif err == "closed" then
+                break
             else
-                logMessage("Error receiving data: " .. err, "ERROR")
-                break
-            end
-        elseif chunk == "EOF" then
-            break -- End of file marker received
-        else
-            data = data .. chunk
-            client:send("ACK") -- Acknowledge receipt
-        end
-    end
-    return data
-end
-
--- Coroutine for sending data
-function sendData(client, data)
-    local totalSent = 0
-    local chunkSize = 1024
-    while totalSent < #data do
-        local chunk = data:sub(totalSent + 1, totalSent + chunkSize)
-        local success, err = client:send(chunk)
-        if not success then
-            if err == "timeout" then
-                coroutine.yield() -- Yield for non-blocking behavior
-            else
-                logMessage("Error sending data: " .. err, "ERROR")
-                break
-            end
-        else
-            totalSent = totalSent + #chunk
-            local ack = client:receive()
-            if ack ~= "ACK" then
-                logMessage("Failed to receive acknowledgment for chunk", "ERROR")
+                print("Error receiving data:", err)
                 break
             end
         end
-    end
-    client:send("EOF")
-end
--- Function to send a file using coroutines
-function sendFileCoroutine(filename, client)
-    local file, err = io.open(sanitizeFilePath(filename), "rb")
-    if not file then
-        client:send("Error opening file: " .. err .. "\n")
-        logMessage("Error opening file: " .. err, "ERROR")
-        return
-    end
-
-    local data = file:read("*a") -- Read entire file
-    file:close()
-
-    local sendCoroutine = coroutine.create(function()
-        sendData(client, data)
-    end)
-
-    while coroutine.status(sendCoroutine) ~= "dead" do
-        coroutine.resume(sendCoroutine)
-    end
-    logMessage("File sent successfully: " .. filename, "INFO")
-end
-
--- Function to receive a file using coroutines
-function receiveFileCoroutine(client, filename)
-    local receiveCoroutine = coroutine.create(function()
-        return receiveData(client)
-    end)
-
-    local receivedData = ""
-    while coroutine.status(receiveCoroutine) ~= "dead" do
-        local _, data = coroutine.resume(receiveCoroutine)
-        if data then
-            receivedData = receivedData .. data
-        end
-    end
-
-    -- Save received data to a file
-    local file, err = io.open(sanitizeFilePath(filename), "wb")
-    if not file then
-        logMessage("Error saving file: " .. err, "ERROR")
-        return
-    end
-    file:write(receivedData)
-    file:close()
-    logMessage("File received and saved as " .. filename, "INFO")
-end
--- Server communication handler
-function handleServerCommunication(client)
-    while true do
-        local data, err = client:receive()
-        if not data then
-            logMessage("Client disconnected or error: " .. (err or "unknown"), "ERROR")
+        result = result .. chunk
+        -- Check if the result ends with a newline (indicating the end of the response)
+        if result:sub(-1) == "\n" then
             break
         end
+    end
 
-        if data:match("^get%s+(.+)$") then
-            local filename = data:match("^get%s+(.+)$")
-            sendFileCoroutine(filename, client)
-        elseif data:match("^exit$") then
-            client:send("Goodbye!\n")
-            break
-        else
-            client:send("Unknown command.\n")
+    print("Server response:\n", result)
+
+    -- Check if the response contains "ACK" or "ERROR" and handle it
+    if result:sub(1, 3) == "ACK" then
+        -- If it's an ACK message, proceed with file handling
+        if command:sub(1, 3) == "get" then
+            local filename = command:sub(5)
+            write_file(filename, result)  -- Write the received content to a file
         end
-    end
-    client:close()
-end
-
--- Function to run the server
-function runServer()
-    print("Enter IP address to bind (default: 127.0.0.1):")
-    local host = io.read()
-    if host == "" then host = "127.0.0.1" end
-    print("Enter port to listen on (default: 69):")
-    local port = tonumber(io.read())
-    if not port then port = 69 end
-
-    local server = assert(socket.bind(host, port))
-    print("Server started on " .. host .. ":" .. port)
-    logMessage("Server started on " .. host .. ":" .. port, "INFO")
-
-    while true do
-        print("Waiting for a client...")
-        local client = server:accept()
-        logMessage("Client connected", "INFO")
-        handleServerCommunication(client)
+    elseif result:sub(1, 5) == "ERROR" then
+        -- If it's an error message, print it and do not write to the file
+        print("Error: " .. result)
     end
 end
--- Function to run the client
-function runClient()
-    print("Enter server IP address:")
-    local host = io.read()
-    print("Enter server port:")
-    local port = tonumber(io.read())
 
-    local client = socket.tcp()
-    client:settimeout(10)
-
-    if not client:connect(host, port) then
-        logMessage("Failed to connect to server", "ERROR")
-        return
+-- Function to write the received content to a file
+function write_file(filename, content)
+    local file = io.open(filename, "w")
+    if file then
+        file:write(content)
+        file:close()
+        print("File saved as: " .. filename)
+    else
+        print("Error: Unable to save file.")
     end
+end
 
+-- Function to verify the integrity of the file by comparing checksums
+function verify_file_integrity(filename, expected_checksum)
+    local actual_checksum = calculate_checksum(filename)
+    if actual_checksum == expected_checksum then
+        print("File integrity verified.")
+        return true
+    else
+        print("ERROR: File integrity check failed.")
+        return false
+    end
+end
+
+-- Main client function that connects to the server and sends commands
+function client()
+    local ip, port = ask_for_ip_and_port("127.0.0.1", 8080)  -- Prompt for IP and port
+    local client = assert(socket.tcp())  -- Create a TCP client socket
+    client:connect(ip, port)  -- Connect to the server at the specified IP and port
     print("Connected to server.")
-    logMessage("Connected to server: " .. host .. ":" .. port, "INFO")
 
+    -- Prompt the user to enter commands
     while true do
-        print("Enter command (or 'exit' to quit):")
+        print("Enter command (type 'exit' to quit, 'get <filename>' to get a file):")
         local command = io.read()
+
         if command == "exit" then
-            client:send(command)
+            print("Exiting...")
             break
-        elseif command:match("^get%s+(.+)$") then
-            local filename = command:match("^get%s+(.+)$")
-            client:send(command)
-            receiveFileCoroutine(client, filename)
-        else
-            client:send(command)
-            print("Server response: " .. (client:receive() or "No response"))
+        end
+
+        -- Send command to server and handle response
+        client_send_command(client, command)
+
+        -- If the command is 'get', verify the file integrity after download
+        if command:sub(1, 3) == "get" then
+            local filename = command:sub(5)
+            local expected_checksum = calculate_checksum(filename)  -- Get checksum of original file
+            if not verify_file_integrity(filename, expected_checksum) then
+                print("File transfer failed or corrupted.")
+            end
         end
     end
-    client:close()
+
+    client:close()  -- Close the connection after sending the commands
+    print("Disconnected from server.")
 end
--- Main execution
-print("Select role: 1. Server 2. Client")
-local role = tonumber(io.read())
-if role == 1 then
-    runServer()
-elseif role == 2 then
-    runClient()
-else
-    print("Invalid selection. Exiting.")
-end
+
+client()
