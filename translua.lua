@@ -78,11 +78,37 @@ function send_file_in_chunks(client, filename)
                 client:send(chunk)  -- Send the chunk to the client
             end
         until not chunk  -- Continue until the end of the file
+        client:send("EOF")  -- Send EOF marker to indicate file transfer completion
         file:close()
         log("File sent: " .. filename)
     else
         client:send("ERROR: File not found.\n")
         log("Error: File not found for transfer.")
+    end
+end
+
+-- Function to receive a file in chunks
+function receive_file_in_chunks(client, filename)
+    log("Receiving file in chunks: " .. filename)
+    local file = io.open(filename, "wb")
+    if file then
+        while true do
+            local chunk, err = client:receive(CHUNK_SIZE)
+            if err then
+                log("Error receiving file: " .. err)
+                break
+            end
+            if chunk == "EOF" then  -- Check for EOF marker
+                log("EOF received. File transfer complete.")
+                break
+            end
+            file:write(chunk)  -- Write the chunk to the file
+        end
+        file:close()
+        log("File received and saved as: " .. filename)
+    else
+        log("Error: Unable to save file.")
+        print("Error: Unable to save file.")
     end
 end
 
@@ -206,98 +232,23 @@ end
 -- Function to send a command to the server and receive the result
 function client_send_command(client, command)
     log("Sending command: " .. command)
-    client:send(command .. "\n")  -- Send the command to the server
-
-    -- Receive the result of the command from the server
-    local result = ""
-    while true do
-        local chunk, err = client:receive(CHUNK_SIZE)
-        if err then
-            if err == "timeout" then
-                log("Timeout while waiting for server response.")
-                print("Timeout while waiting for server response.")
-                break
-            elseif err == "closed" then
-                break
-            else
-                log("Error receiving data: " .. err)
-                print("Error receiving data:", err)
-                break
-            end
-        end
-        result = result .. chunk
-        -- Check if the result ends with a newline (indicating the end of the response)
-        if result:sub(-1) == "\n" then
-            break
-        end
-    end
-
-    log("Server response:\n" .. result)
-    print("Server response:\n", result)
-
-    -- Handle file writing
-    if result:sub(1, 3) == "ACK" then
-        if command:sub(1, 3) == "get" then
-            local filename = command:sub(5)
-            write_file(filename, result)
-        end
-    elseif result:sub(1, 5) == "ERROR" then
-        log("Error: " .. result)
-        print("Error: " .. result)
-    end
-end
-
--- Function to check if a file exists
-function file_exists(filename)
-    local file = io.open(filename, "r")
-    if file then
-        file:close()
-        return true
+    client:send(command .. "\n")  -- Send the command with a newline character
+    local response, err = client:receive("*l")
+    if err then
+        log("Error receiving response: " .. err)
+        print("Error receiving response:", err)
     else
-        return false
+        log("Response received: " .. response)
+        print("Server response:", response)
     end
 end
 
--- Function to write the received content to a file
-function write_file(filename, content)
-    log("Writing content to file: " .. filename)
-    local file = io.open(filename, "w")
-    if file then
-        file:write(content)
-        file:close()
-        log("File saved as: " .. filename)
-        print("File saved as: " .. filename)
-    else
-        log("Error: Unable to save file.")
-        print("Error: Unable to save file.")
-    end
+-- Main entry point
+local mode = arg[1]  -- Get the first command-line argument
+if mode == "server" then
+    server()
+elseif mode == "client" then
+    client()
+else
+    print("Usage: lua script.lua <server|client>")
 end
-
--- Function to verify file integrity (checksum comparison)
-function verify_file_integrity(filename, expected_checksum)
-    log("Verifying file integrity for: " .. filename)
-    local file_checksum = calculate_checksum(filename)
-    if file_checksum == expected_checksum then
-        log("File integrity verified for: " .. filename)
-        return true
-    else
-        log("File integrity check failed for: " .. filename)
-        return false
-    end
-end
-
--- Main decision function: decides whether to run as client or server
-function main()
-    print("Choose mode (1: Server, 2: Client):")
-    local choice = tonumber(io.read())
-    if choice == 1 then
-        server()  -- Run the server
-    elseif choice == 2 then
-        client()  -- Run the client
-    else
-        print("Invalid choice.")
-    end
-end
-
--- Call the main function to start the program
-main()
